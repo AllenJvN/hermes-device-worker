@@ -48,6 +48,72 @@ def _secret(text: str) -> str:
     return _c("35;1", text)
 
 
+def _dim(text: str) -> str:
+    return _c("2", text)
+
+
+def _now() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def _preview(value: str, limit: int = 90) -> str:
+    value = " ".join(str(value).split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
+
+
+def _request_summary(msg: Dict[str, Any]) -> str:
+    payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
+    t = str(msg.get("type") or "unknown")
+    if t == "shell":
+        command = _preview(str(payload.get("command") or ""))
+        cwd = payload.get("cwd")
+        return f"shell command={command!r}" + (f" cwd={cwd}" if cwd else "")
+    if t == "computer_use":
+        args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+        action = args.get("action", "?")
+        bits = [f"computer_use action={action}"]
+        for key in ("app", "mode", "element", "direction", "keys"):
+            if args.get(key) is not None:
+                bits.append(f"{key}={args[key]!r}")
+        if action == "type" and args.get("text") is not None:
+            text_preview = _preview(args["text"], 40)
+            bits.append(f"text={text_preview!r}")
+        return " ".join(bits)
+    return t
+
+
+def _response_ok(reply: Dict[str, Any]) -> bool:
+    if reply.get("type") == "error":
+        return False
+    payload = reply.get("payload")
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        return False
+    return True
+
+
+def _log_request(msg: Dict[str, Any], reply: Dict[str, Any], elapsed: float, verbosity: str) -> None:
+    if verbosity == "quiet":
+        return
+    ok = _response_ok(reply)
+    status = _ok("ok") if ok else _warn("fail")
+    elapsed_text = _dim(f"{elapsed:.3f}s")
+    rpc_label = _label("rpc")
+    print(
+        f"{_dim(_now())} {status} {rpc_label} {_request_summary(msg)} {elapsed_text}",
+        flush=True,
+    )
+    if not ok:
+        err = reply.get("error")
+        payload = reply.get("payload")
+        if not err and isinstance(payload, dict):
+            err = payload.get("error")
+        if err:
+            error_label = _warn("error")
+            print(f"  {error_label} {_preview(str(err), 160)}", flush=True)
+
+
 VALID_REQUEST_TYPES = frozenset({
     "ping",
     "capabilities",
@@ -293,7 +359,7 @@ async def _dispatch(msg: Dict[str, Any], token: str, display_name: str) -> Dict[
     return make_error(req_id, f"unhandled request: {t!r}")
 
 
-async def serve(host: str, port: int, display_name: str) -> None:
+async def serve(host: str, port: int, display_name: str, verbosity: str = "normal") -> None:
     try:
         import websockets
     except ImportError as exc:
@@ -314,12 +380,20 @@ async def serve(host: str, port: int, display_name: str) -> None:
 
     async def handler(ws):
         async for raw in ws:
+            started = time.time()
             try:
                 msg = decode(raw if isinstance(raw, str) else raw.decode("utf-8"))
             except Exception as exc:
-                await ws.send(json.dumps(make_error("", f"decode: {exc}")))
+                reply = make_error("", f"decode: {exc}")
+                await ws.send(json.dumps(reply))
+                if verbosity != "quiet":
+                    fail_label = _warn("fail")
+                    rpc_label = _label("rpc")
+                    zero_elapsed = _dim("0.000s")
+                    print(f"{_dim(_now())} {fail_label} {rpc_label} decode {zero_elapsed}", flush=True)
                 continue
             reply = await _dispatch(msg, token, display_name)
+            _log_request(msg, reply, time.time() - started, verbosity)
             await ws.send(json.dumps(reply, ensure_ascii=False))
 
     async with websockets.serve(handler, host, port):
@@ -331,9 +405,10 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18888)
     parser.add_argument("--display-name", default=socket.gethostname())
+    parser.add_argument("--verbosity", choices=["quiet", "normal"], default=os.environ.get("HERMES_DEVICE_WORKER_VERBOSITY", "normal"))
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.host, args.port, args.display_name))
+        asyncio.run(serve(args.host, args.port, args.display_name, args.verbosity))
     except KeyboardInterrupt:
         return 0
     except Exception as exc:
