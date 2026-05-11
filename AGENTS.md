@@ -20,6 +20,10 @@ Edit the repo clone first:
 cd /home/allen/projects/hermes-device-worker
 ```
 
+Keep the public `README.md` generic and install-focused. Allen-specific paths,
+live homelab sync notes, and testing context belong in this file unless they are
+clearly labeled as examples.
+
 After testing changes, keep these copies synchronized:
 
 ```bash
@@ -75,4 +79,3 @@ the tool result includes a warning such as: requested `Finder`, captured
   committed.
 - The worker is LAN-first; do not expose it publicly without adding a stronger
   transport/security layer.
-
