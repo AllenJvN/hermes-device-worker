@@ -14,6 +14,9 @@ VALID_REQUEST_TYPES = frozenset({
     "shell",
     "computer_use",
     "list_apps",
+    "workspace",
+    "terminal",
+    "desktop",
 })
 
 
@@ -84,4 +87,3 @@ def validate_request(msg: Dict[str, Any], expected_token: str) -> Tuple[bool, st
     if not isinstance(payload, dict):
         return False, "payload must be a dict"
     return True, ""
-

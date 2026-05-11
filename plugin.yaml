@@ -1,19 +1,13 @@
 name: device_worker
-version: 0.1.0
-description: "Remote device workers for shell and macOS GUI control from a central Hermes instance."
+version: 0.2.0
+description: "Compact remote worker tools for nodes, workspaces, terminals, and macOS GUI control."
 author: local
 kind: standalone
 platforms:
   - linux
   - macos
 provides_tools:
-  - device_list_nodes
-  - device_ping_node
-  - device_shell
-  - device_capture
-  - device_click
-  - device_type
-  - device_key
-  - device_scroll
-  - device_list_apps
-
+  - device_node
+  - device_desktop
+  - device_workspace
+  - device_terminal

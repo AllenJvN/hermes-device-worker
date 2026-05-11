@@ -10,7 +10,9 @@ control. The first supported worker target is macOS.
 
 Current capabilities:
 
-- Remote shell commands on approved worker machines
+- Compact node/status tools for approved worker machines
+- Workspace tools for repo inspection, search, patching, and git status/diff
+- Named persistent terminal sessions for tests, dev servers, and REPLs
 - Running app discovery
 - macOS desktop/app capture
 - Background click, type, key, and scroll actions through `cua-driver`
@@ -41,6 +43,8 @@ On the central Hermes machine:
 - The `hermes` CLI is available.
 - The Hermes machine can reach the worker machine over LAN, Tailscale, or
   another private network.
+- Enable toolset `device_worker` for node/desktop control and `device_coding`
+  for workspace/terminal coding tools.
 
 On the worker Mac:
 
@@ -180,36 +184,34 @@ After Hermes connects, the worker logs RPC activity by default, for example:
 ```text
 17:32:11 ok rpc ping 0.001s
 17:32:14 ok rpc capabilities 0.423s
-17:32:20 ok rpc computer_use action=capture app='Terminal' mode='ax' 0.812s
-17:32:25 ok rpc shell command='hostname' 0.031s
+17:32:20 ok rpc workspace action=git_status cwd='/Users/me/project' 0.031s
+17:32:25 ok rpc terminal action=read name='dev-server' 0.002s
+17:32:26 ok rpc desktop action=capture app='Terminal' mode='ax' 0.812s
 ```
 
 On Hermes, `ping` should return worker host/platform information. Capabilities
-should include `shell`, `list_apps`, and, when permissions are ready,
-`computer_use`.
+should include `workspace`, `terminal_sessions`, and, when permissions are
+ready, `computer_use`.
 
 ## Use From Hermes
 
-The plugin registers these agent tools:
+The plugin exposes four compact agent tools:
 
-- `device_list_nodes`
-- `device_ping_node`
-- `device_shell`
-- `device_capture`
-- `device_click`
-- `device_type`
-- `device_key`
-- `device_scroll`
-- `device_list_apps`
+- `device_node`: discover and check approved workers.
+- `device_workspace`: inspect/edit files and repos.
+- `device_terminal`: manage persistent terminals for commands, tests, REPLs, and servers.
+- `device_desktop`: control GUI apps through capture/click/type/key/scroll.
 
 Useful Hermes prompts:
 
 ```text
 List my approved device workers.
-On macbook-allen, run hostname.
+On macbook-allen, show git status for ~/src/my-app.
+On macbook-allen, search ~/src/my-app for "TODO".
+On macbook-allen, start a terminal named dev-server in ~/src/my-app and run npm run dev.
+Read the latest output from the dev-server terminal on macbook-allen.
 On macbook-allen, list running apps.
 On macbook-allen, capture Safari.
-On macbook-allen, open VS Code using the shell.
 ```
 
 For GUI work, capture first, then act on element indexes:
@@ -219,6 +221,17 @@ On macbook-allen, capture Notes.
 Click element 12 on macbook-allen.
 Type "hello from Hermes" on macbook-allen.
 ```
+
+The tools are intentionally domain-specific:
+
+- Use `device_node` only for discovery/status.
+- Use `device_workspace` for files, repos, search, and patches.
+- Use `device_terminal` for commands and long-running processes.
+- Use `device_desktop` only when GUI control is required.
+
+Version `0.2.0` replaced the older many-tool surface
+(`device_shell`, `device_capture`, `device_click`, and friends) with these four
+compact tools to reduce context bloat and wrong-tool selection.
 
 You can also test directly with the CLI:
 
@@ -300,12 +313,13 @@ tail -f ~/Library/Logs/hermes-device-worker.err.log
 
 Treat approved workers as trusted machines.
 
-- Pairing grants Hermes shell and GUI control on that worker.
+- Pairing grants Hermes workspace, terminal, and GUI control on that worker.
 - Worker tokens are generated locally and should never be committed.
 - The central Hermes registry stores approved node URLs and tokens at
   `~/.hermes/workspace/device_nodes/nodes.json`.
 - LAN/private-network operation is the intended v1 deployment model.
-- Built-in shell and GUI safety blocks are guardrails, not a security sandbox.
+- Built-in shell, write-path, terminal, and GUI safety blocks are guardrails,
+  not a security sandbox.
 - Only approve workers that you personally control and trust.
 
 ## Troubleshooting
@@ -350,6 +364,16 @@ Check that:
 If the requested app has no visible or capturable window, the macOS backend may
 capture another available app and return a warning. Open or focus the intended
 app, then capture again.
+
+### Hermes seems to choose the wrong device tool
+
+The compact tool surface is intentionally split by domain. Rephrase with the
+domain if needed:
+
+- “Use the workspace tool to read/edit/search files.”
+- “Use the terminal tool to run tests or keep a server alive.”
+- “Use the desktop tool to click/type/capture GUI apps.”
+- “Use the node tool to list or check workers.”
 
 ## Development
 

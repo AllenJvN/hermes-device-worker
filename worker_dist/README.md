@@ -40,6 +40,20 @@ Expected GUI-ready capability:
 "computer_use": true
 ```
 
+Expected coding-ready capabilities:
+
+```text
+"workspace": true
+"terminal_sessions": true
+```
+
+The central Hermes plugin exposes a compact tool surface:
+
+- `device_node` for worker discovery/status
+- `device_workspace` for files, repos, search, patches, and git status/diff
+- `device_terminal` for persistent commands, tests, REPLs, and dev servers
+- `device_desktop` for GUI capture/click/type/key/scroll
+
 ## macOS GUI Control
 
 Shell access works without GUI permissions. Desktop/app control requires:

@@ -60,15 +60,25 @@ hermes device node ping macbook-allen
 hermes device node capabilities macbook-allen
 ```
 
-Expected GUI-ready status:
+Expected compact tool/coding status:
 
 ```json
-{"computer_use": true}
+{"tool_surface": "compact-v1", "workspace": true, "terminal_sessions": true, "computer_use": true}
 ```
 
 For capture mismatch testing, ask for an app with no visible window and confirm
 the tool result includes a warning such as: requested `Finder`, captured
 `Calendar`.
+
+The public tool surface should stay compact:
+
+- `device_node` for discovery/status
+- `device_workspace` for files/repos/search/patch/git
+- `device_terminal` for persistent command sessions
+- `device_desktop` for GUI/app control
+
+Do not re-expand the plugin into many single-action tools unless there is a
+strong reason; tool schema bloat makes Hermes less predictable.
 
 ## Design Notes
 
@@ -79,3 +89,5 @@ the tool result includes a warning such as: requested `Finder`, captured
   committed.
 - The worker is LAN-first; do not expose it publicly without adding a stronger
   transport/security layer.
+- Toolsets are split intentionally: `device_worker` registers node/desktop
+  tools, and `device_coding` registers workspace/terminal tools.

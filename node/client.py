@@ -63,3 +63,11 @@ class DeviceNodeClient:
     def list_apps(self) -> Dict[str, Any]:
         return self._rpc("list_apps")
 
+    def workspace(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        return self._rpc("workspace", args)
+
+    def terminal(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        return self._rpc("terminal", args)
+
+    def desktop(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        return self._rpc("desktop", args)
