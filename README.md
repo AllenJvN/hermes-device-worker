@@ -151,11 +151,48 @@ tail -f ~/Library/Logs/hermes-device-worker.err.log
 
 ## Development
 
+Canonical development repo in Allen's homelab:
+
+```text
+/home/allen/projects/hermes-device-worker
+```
+
+Public repo:
+
+```text
+https://github.com/AllenJvN/hermes-device-worker
+```
+
 The repo root is the Hermes plugin. `worker_dist/` is the distributable client
 folder copied to `~/.hermes/device-worker` by:
 
 ```bash
 hermes device sync-dist
+```
+
+Allen's live Hermes install also has a bundled/test copy at:
+
+```text
+/home/allen/.hermes/hermes-agent/plugins/device_worker
+```
+
+When changing worker/plugin files in the homelab, keep all three copies in sync:
+
+```bash
+# from /home/allen/projects/hermes-device-worker
+rsync -a --delete --exclude .git --exclude __pycache__ --exclude '*.pyc' ./ \
+  ~/.hermes/hermes-agent/plugins/device_worker/
+hermes device sync-dist
+git status
+git commit -am "..."
+git push
+```
+
+Before pushing, test against the live homelab worker when available:
+
+```bash
+hermes device node list
+hermes device node capabilities macbook-allen
 ```
 
 Basic local checks:
@@ -164,4 +201,3 @@ Basic local checks:
 python3 -m py_compile $(find . -name '*.py')
 bash -n worker_dist/*.sh
 ```
-
