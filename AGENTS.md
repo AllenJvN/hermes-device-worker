@@ -66,6 +66,11 @@ Expected compact tool/coding status:
 {"tool_surface": "compact-v1", "workspace": true, "terminal_sessions": true, "computer_use": true}
 ```
 
+Terminal sessions are intentionally persistent, but should not leak unbounded
+memory: output buffers are capped, live session count is capped, exited sessions
+are pruned after the retention window, and worker shutdown/SIGTERM/SIGINT kills
+all sessions.
+
 For capture mismatch testing, ask for an app with no visible window and confirm
 the tool result includes a warning such as: requested `Finder`, captured
 `Calendar`.

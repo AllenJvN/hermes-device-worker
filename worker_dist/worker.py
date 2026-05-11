@@ -36,6 +36,8 @@ PROTOCOL_VERSION = "compact-v1"
 MAX_TEXT_READ_BYTES = 200_000
 MAX_TOOL_OUTPUT_BYTES = 200_000
 TERMINAL_BUFFER_CHARS = 250_000
+TERMINAL_MAX_SESSIONS = int(os.environ.get("HERMES_DEVICE_WORKER_MAX_TERMINALS", "24"))
+TERMINAL_DEAD_RETAIN_SECONDS = int(os.environ.get("HERMES_DEVICE_WORKER_DEAD_TERMINAL_RETAIN_SECONDS", "1800"))
 
 
 def _use_color() -> bool:
@@ -253,12 +255,19 @@ def _computer_use_available() -> bool:
 
 def _capabilities() -> Dict[str, Any]:
     computer_use = _computer_use_status()
+    terminal_state = TERMINALS.summary() if "TERMINALS" in globals() else {}
     return {
         "protocol_version": PROTOCOL_VERSION,
         "tool_surface": "compact-v1",
         "shell": True,
         "workspace": True,
         "terminal_sessions": sys.platform != "win32",
+        "terminal_policy": {
+            "max_sessions": TERMINAL_MAX_SESSIONS,
+            "dead_retention_seconds": TERMINAL_DEAD_RETAIN_SECONDS,
+            "buffer_chars_per_session": TERMINAL_BUFFER_CHARS,
+            **terminal_state,
+        },
         "computer_use": bool(computer_use.get("available")),
         "computer_use_detail": computer_use,
         "list_apps": True,
@@ -640,26 +649,49 @@ class TerminalSession:
             self.write(command if command.endswith("\n") else command + "\n")
 
     def _reader_loop(self) -> None:
-        while not self._closed:
-            try:
-                readable, _, _ = select.select([self._master_fd], [], [], 0.2)
-                if not readable:
-                    if self.proc.poll() is not None:
-                        break
-                    continue
-                data = os.read(self._master_fd, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            text = data.decode("utf-8", errors="replace")
+        try:
+            while not self._closed:
+                try:
+                    readable, _, _ = select.select([self._master_fd], [], [], 0.2)
+                    if not readable:
+                        if self.proc.poll() is not None:
+                            break
+                        continue
+                    data = os.read(self._master_fd, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                with self._lock:
+                    self._buffer += text
+                    if len(self._buffer) > TERMINAL_BUFFER_CHARS:
+                        drop = len(self._buffer) - TERMINAL_BUFFER_CHARS
+                        self._buffer = self._buffer[drop:]
+                        self._base_cursor += drop
+                    self.last_activity = time.time()
+        finally:
             with self._lock:
-                self._buffer += text
-                if len(self._buffer) > TERMINAL_BUFFER_CHARS:
-                    drop = len(self._buffer) - TERMINAL_BUFFER_CHARS
-                    self._buffer = self._buffer[drop:]
-                    self._base_cursor += drop
                 self.last_activity = time.time()
+
+    def close_fd(self) -> None:
+        try:
+            os.close(self._master_fd)
+        except OSError:
+            pass
+
+    def dispose_dead(self) -> Dict[str, Any]:
+        self._closed = True
+        self.close_fd()
+        if threading.current_thread() is not self._reader and self._reader.is_alive():
+            self._reader.join(timeout=0.2)
+        return {"ok": True, "terminal": self.snapshot()}
+
+    def age_since_activity(self) -> float:
+        return max(0.0, time.time() - self.last_activity)
+
+    def should_prune(self, now: float, retain_seconds: int) -> bool:
+        return not self.alive() and (now - self.last_activity) >= retain_seconds
 
     def alive(self) -> bool:
         return not self._closed and self.proc.poll() is None
@@ -673,9 +705,12 @@ class TerminalSession:
             "cwd": self.cwd,
             "pid": self.proc.pid,
             "alive": self.alive(),
+            "exit_code": self.proc.poll(),
             "created_at": self.created_at,
             "last_activity": self.last_activity,
+            "idle_seconds": round(self.age_since_activity(), 3),
             "cursor": end_cursor,
+            "buffer_chars": len(self._buffer),
         }
 
     def read(self, cursor: int | None = None, max_bytes: int = 20_000) -> Dict[str, Any]:
@@ -735,9 +770,12 @@ class TerminalSession:
                 except Exception:
                     pass
         try:
-            os.close(self._master_fd)
-        except OSError:
+            self.proc.wait(timeout=0.3)
+        except Exception:
             pass
+        self.close_fd()
+        if threading.current_thread() is not self._reader and self._reader.is_alive():
+            self._reader.join(timeout=0.2)
         return {"ok": True, "terminal": self.snapshot()}
 
 
@@ -745,11 +783,33 @@ class TerminalManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sessions: Dict[str, TerminalSession] = {}
+        self.max_sessions = max(1, TERMINAL_MAX_SESSIONS)
+        self.dead_retain_seconds = max(0, TERMINAL_DEAD_RETAIN_SECONDS)
+
+    def _prune_locked(self) -> int:
+        now = time.time()
+        prune_ids = [
+            sid for sid, session in self._sessions.items()
+            if session.should_prune(now, self.dead_retain_seconds)
+        ]
+        for sid in prune_ids:
+            self._sessions.pop(sid).dispose_dead()
+        return len(prune_ids)
+
+    def summary(self) -> Dict[str, Any]:
+        with self._lock:
+            self._prune_locked()
+            sessions = list(self._sessions.values())
+        return {
+            "active_sessions": sum(1 for s in sessions if s.alive()),
+            "retained_dead_sessions": sum(1 for s in sessions if not s.alive()),
+        }
 
     def _get(self, payload: Dict[str, Any]) -> TerminalSession | None:
         term_id = payload.get("terminal_id")
         name = payload.get("name")
         with self._lock:
+            self._prune_locked()
             if term_id and term_id in self._sessions:
                 return self._sessions[term_id]
             if name:
@@ -766,8 +826,31 @@ class TerminalManager:
             cwd = _resolve_path(payload.get("cwd") or ".")
             if not cwd.is_dir():
                 return {"ok": False, "error": f"cwd is not a directory: {cwd}"}
+            name = str(payload.get("name") or "")
+            with self._lock:
+                pruned = self._prune_locked()
+                if name:
+                    for sid, existing in list(self._sessions.items()):
+                        if existing.name == name and existing.alive():
+                            return {
+                                "ok": False,
+                                "error": (
+                                    f"terminal name {name!r} already exists; use action=read/send with "
+                                    "that name, or kill it before creating another"
+                                ),
+                                "terminal": existing.snapshot(),
+                            }
+                        if existing.name == name and not existing.alive():
+                            self._sessions.pop(sid).dispose_dead()
+                if len(self._sessions) >= self.max_sessions:
+                    return {
+                        "ok": False,
+                        "error": f"terminal session limit reached ({self.max_sessions}); kill an existing terminal first",
+                        "pruned_dead_sessions": pruned,
+                        "terminals": [s.snapshot() for s in self._sessions.values()],
+                    }
             session = TerminalSession(
-                name=str(payload.get("name") or ""),
+                name=name,
                 cwd=cwd,
                 command=str(payload.get("command") or "") or None,
                 cols=int(payload.get("cols") or 120),
@@ -778,8 +861,9 @@ class TerminalManager:
             return {"ok": True, "terminal": session.snapshot()}
         if action == "list":
             with self._lock:
+                pruned = self._prune_locked()
                 sessions = [s.snapshot() for s in self._sessions.values()]
-            return {"ok": True, "terminals": sessions}
+            return {"ok": True, "terminals": sessions, "pruned_dead_sessions": pruned}
         session = self._get(payload)
         if session is None:
             return {"ok": False, "error": "terminal not found; pass terminal_id or name from device_terminal action=list"}
@@ -807,6 +891,20 @@ class TerminalManager:
 
 
 TERMINALS = TerminalManager()
+
+
+def _print_banner(display_name: str) -> None:
+    art = r"""
+      __  __
+     / / / /__  _________ ___  ___  _____
+    / /_/ / _ \/ ___/ __ `__ \/ _ \/ ___/
+   / __  /  __/ /  / / / / / /  __(__  )
+  /_/ /_/\___/_/  /_/ /_/ /_/\___/____/
+    """
+    for line in art.strip("\n").splitlines():
+        print(_c("36;1", line), flush=True)
+    print(_dim("central brain, local hands"), flush=True)
+    print(_dim(f"worker: {display_name}"), flush=True)
 
 
 def _run_computer_use(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -923,9 +1021,26 @@ async def serve(host: str, port: int, display_name: str, verbosity: str = "norma
         raise RuntimeError("Install dependencies first: ./install.sh") from exc
 
     token = ensure_token()
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def request_shutdown(signum: int) -> None:
+        print(_warn(f"[device-worker] shutdown signal {signum}; closing terminal sessions"), flush=True)
+        stop_event.set()
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is not None:
+            try:
+                loop.add_signal_handler(sig, request_shutdown, int(sig))
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
+
+    _print_banner(display_name)
     print(_ok("[device-worker] ready"), flush=True)
     print(f"{_label('display')}   {display_name}", flush=True)
     print(f"{_label('listen')}    ws://{host}:{port}", flush=True)
+    print(f"{_label('runtime')}   {PROTOCOL_VERSION}", flush=True)
+    print(f"{_label('terminal')}  max={TERMINAL_MAX_SESSIONS} dead-retain={TERMINAL_DEAD_RETAIN_SECONDS}s buffer={TERMINAL_BUFFER_CHARS}", flush=True)
     print(f"{_label('token')}     {_secret(token)}", flush=True)
     print(_warn("approve on Hermes:"), flush=True)
     print(
@@ -955,7 +1070,7 @@ async def serve(host: str, port: int, display_name: str, verbosity: str = "norma
 
     try:
         async with websockets.serve(handler, host, port):
-            await asyncio.Future()
+            await stop_event.wait()
     finally:
         TERMINALS.shutdown()
 

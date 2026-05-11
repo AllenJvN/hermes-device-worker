@@ -54,6 +54,11 @@ The central Hermes plugin exposes a compact tool surface:
 - `device_terminal` for persistent commands, tests, REPLs, and dev servers
 - `device_desktop` for GUI capture/click/type/key/scroll
 
+Terminal sessions are persistent until killed or until the worker stops. The
+worker closes all sessions on SIGINT/SIGTERM, caps the number of sessions, keeps
+terminal output in bounded buffers, and prunes exited sessions after a short
+retention window.
+
 ## macOS GUI Control
 
 Shell access works without GUI permissions. Desktop/app control requires:

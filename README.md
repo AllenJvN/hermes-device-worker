@@ -189,6 +189,13 @@ After Hermes connects, the worker logs RPC activity by default, for example:
 17:32:26 ok rpc desktop action=capture app='Terminal' mode='ax' 0.812s
 ```
 
+The worker startup banner also prints the protocol version and terminal policy:
+
+```text
+runtime   compact-v1
+terminal  max=24 dead-retain=1800s buffer=250000
+```
+
 On Hermes, `ping` should return worker host/platform information. Capabilities
 should include `workspace`, `terminal_sessions`, and, when permissions are
 ready, `computer_use`.
@@ -232,6 +239,15 @@ The tools are intentionally domain-specific:
 Version `0.2.0` replaced the older many-tool surface
 (`device_shell`, `device_capture`, `device_click`, and friends) with these four
 compact tools to reduce context bloat and wrong-tool selection.
+
+Terminal lifecycle defaults:
+
+- Terminals are persistent by design until killed or the worker stops.
+- Worker shutdown, SIGINT, and SIGTERM close all terminal sessions.
+- Terminal output is stored in a bounded ring buffer per session.
+- Exited terminal sessions are retained briefly for log reads, then pruned.
+- Duplicate live terminal names are rejected to avoid accidental session piles.
+- The default cap is 24 terminal sessions per worker.
 
 You can also test directly with the CLI:
 
